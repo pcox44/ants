@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ants on a Polygon — Smooth Animation</title>
+<style>
+:root{
+  --bg:#0f172a;--card:#0b1220;--accent:#7dd3fc;--muted:#94a3b8;
+}
+body{font-family:Inter,ui-sans-serif,system-ui,Arial,Helvetica;background:var(--bg);color:#e6eef8;margin:0;padding:24px;}
+.container{max-width:980px;margin:0 auto}
+h1{margin:0 0 12px;font-size:20px}
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+input[type=number]{width:90px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:#051125;color:inherit}
+button{background:var(--accent);border:none;padding:8px 12px;border-radius:8px;color:#022;cursor:pointer;font-weight:600}
+button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+.card{background:var(--card);padding:14px;border-radius:12px;margin-bottom:12px}
+#canvasWrap{display:flex;gap:12px;align-items:flex-start}
+canvas{background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-radius:10px}
+.results{min-width:260px}
+.stat{font-size:14px;margin:6px 0}
+.progress{height:10px;background:rgba(255,255,255,0.03);border-radius:6px;overflow:hidden}
+.progress > i{display:block;height:100%;background:linear-gradient(90deg,#7dd3fc,#60a5fa);width:0%}
+.small{font-size:12px;color:var(--muted)}
+.footer{margin-top:10px;color:#cbd5e1;font-size:13px;line-height:1.4}
+.footer p strong{color:#7dd3fc;}
+.footer div{text-align:center;}
+.history{margin-top:8px;max-height:160px;overflow:auto;border-radius:8px;padding:8px;background:rgba(0,0,0,0.25)}
+table{width:100%;border-collapse:collapse}
+th,td{padding:6px;text-align:left;font-size:13px}
+th{color:var(--muted);font-weight:600}
+#histogram{width:100%;height:220px;margin-top:20px}
+</style>
+<!-- MathJax for LaTeX rendering -->
+<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+<script id="MathJax-script" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+</head>
+<body>
+<div class="container">
+<h1>Ants on a Polygon — Smooth Animation</h1>
+<div class="card controls">
+<label class="small">Number of sides (n): <input id="nSides" type="number" min="3" value="5"></label>
+<label class="small">Starting vertex A: <input id="startA" type="number" min="0" value="0"></label>
+<label class="small">Place B opposite? <input id="autoOpp" type="checkbox" checked></label>
+<button id="btn1">Run ×1</button>
+<button id="btn10">Run ×10</button>
+<button id="btn50">Run ×50</button>
+<button id="btn1000">Run ×1000</button>
+<button id="animate" class="secondary">Animate single sim</button>
+<button id="reset" class="secondary">Reset</button>
+<label class="small">Histogram cutoff: <input id="cutoff" type="number" min="1" value="50"></label>
+</div>
+
+<div class="card" id="canvasWrap">
+<canvas id="polyCanvas" width="580" height="340"></canvas>
+<div class="results">
+<div class="stat"><strong>Last run:</strong> <span id="lastRun">—</span></div>
+<div class="stat"><strong>Mean rounds:</strong> <span id="mean">—</span></div>
+<div class="stat"><strong>Median:</strong> <span id="median">—</span></div>
+<div class="stat"><strong>Min / Max:</strong> <span id="minmax">—</span></div>
+<div class="stat"><strong>Total sims:</strong> <span id="total">0</span></div>
+<div class="stat small">Progress:</div>
+<div class="progress"><i id="progressBar"></i></div>
+<div class="history" id="history">
+<table><thead><tr><th>#</th><th>Rounds</th></tr></thead><tbody id="histBody"></tbody></table>
+</div>
+</div>
+</div>
+
+<canvas id="histogram"></canvas>
+
+<div class="footer small">
+<p><strong>Theoretical Expectation:</strong></p>
+<p>
+For a polygon with \( n \) sides, the expected number of rounds 
+until two ants starting on opposite vertices meet is:
+</p>
+<p style="text-align:center; font-size:14px;">
+\[
+  E[T] =
+  \begin{cases} 
+    \dfrac{n^2}{4}, & \text{if } n \text{ is even} \\
+    \dfrac{n^2 - 1}{4}, & \text{if } n \text{ is odd} 
+  \end{cases}
+\]
+</p>
+<p>
+Two ants start on opposite (or nearly opposite) vertices. Each round, 
+they flip a coin to move one vertex clockwise (heads) or 
+counterclockwise (tails). They meet when they land on the same vertex 
+or cross an edge.
+</p>
+</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const canvas = $('polyCanvas'); const ctx = canvas.getContext('2d');
+const histCanvas = $('histogram'); const hctx = histCanvas.getContext('2d');
+let cumulativeResults=[];
+
+function mod(a,m){return ((a % m)+m)%m;}
+function oppositeIndex(n, a){return n%2===0? mod(a+n/2,n):mod(a+Math.floor(n/2),n);}
+function runOne(n,a,b){let rounds=0;if(a===b)return 0;while(true){rounds++;const aMove=Math.random()<0.5?1:-1;const bMove=Math.random()<0.5?1:-1;const aNew=mod(a+aMove,n);const bNew=mod(b+bMove,n);if(aNew===bNew || (aNew===b && bNew===a)) return rounds;a=aNew;b=bNew;}}
+function mean(a){return a.reduce((s,x)=>s+x,0)/a.length;}
+function median(a){const s=[...a].sort((x,y)=>x-y);const m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;}
+function updateStats(results){
+  $('lastRun').textContent=results.at(-1)||'—';
+  $('mean').textContent=results.length?mean(results).toFixed(3):'—';
+  $('median').textContent=results.length?median(results).toFixed(3):'—';
+  if(results.length) $('minmax').textContent=Math.min(...results)+' / '+Math.max(...results);
+  $('total').textContent=results.length;
+  const body=$('histBody');body.innerHTML='';
+  const start=Math.max(0,results.length-200);
+  for(let i=start;i<results.length;i++){const tr=document.createElement('tr');tr.innerHTML=`<td>${i+1}</td><td>${results[i]}</td>`;body.appendChild(tr);}
+  drawHistogram(results);
+}
+
+function drawPolygon(n,a,b,antsPos){
+  const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);
+  const cx=W/2,cy=H/2,R=Math.min(W,H)/2-40;
+  const verts=[];for(let i=0;i<n;i++){const θ=-Math.PI/2+i*(2*Math.PI/n);verts.push([cx+R*Math.cos(θ),cy+R*Math.sin(θ)]);}
+  ctx.beginPath();for(let i=0;i<n;i++){const [x,y]=verts[i];if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.closePath();ctx.strokeStyle='rgba(125,211,252,0.5)';ctx.lineWidth=2;ctx.stroke();
+  for(let i=0;i<n;i++){const [x,y]=verts[i];ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,0.2)';ctx.fill();}
+  if(!antsPos) antsPos=[[a,a,1],[b,b,1]];
+  const interp=(v1,v2,p)=>[v1[0]+(v2[0]-v1[0])*p,v1[1]+(v2[1]-v1[1])*p];
+  const drawAnt=(color,pos)=>{const [vStart,vEnd,p]=pos;const [x,y]=interp(verts[vStart],verts[vEnd],p);ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();}
+  drawAnt('red',antsPos[0]);
+  drawAnt('black',antsPos[1]);
+}
+
+function drawHistogram(data){
+  const cutoff=parseInt($('cutoff').value)||50;
+  const W=histCanvas.width=histCanvas.clientWidth||800,H=220;
+  hctx.clearRect(0,0,W,H);
+  if(!data.length)return;
+  const bins=20; const min=0,max=cutoff; const binWidth=(max-min)/bins;
+  const freq=new Array(bins).fill(0); let overflow=0;
+  for(const v of data){if(v>cutoff) overflow++; else{const idx=Math.min(bins-1,Math.floor((v-min)/binWidth));freq[idx]++;}}
+  const maxFreq=Math.max(...freq,overflow);
+  hctx.fillStyle='rgba(125,211,252,0.5)';
+  for(let i=0;i<bins;i++){const x=i*(W/bins);const h=(freq[i]/maxFreq)*H;hctx.fillRect(x,H-h,W/bins-2,h);}
+  if(overflow>0){const x=bins*(W/bins)-2;const h=(overflow/maxFreq)*H;hctx.fillStyle='rgba(255,99,71,0.5)';hctx.fillRect(x,H-h,W/bins-2,h);}
+  hctx.fillStyle='rgba(255,255,255,0.6)';hctx.font='12px monospace';hctx.fillText('Rounds distribution',10,15);
+}
+
+// --- Animate single simulation continuously ---
+async function animateSim() {
+  const n = parseInt($('nSides').value) || 5;
+  let a = parseInt($('startA').value) || 0;
+  let b = $('autoOpp').checked ? oppositeIndex(n, a) : a;
+
+  let pos = [a, b];
+  drawPolygon(n, a, b, [ [a,a,1],[b,b,1] ]);
+
+  let rounds = 0;
+  let running = true;
+
+  while (running) {
+    rounds++;
+    const aMove = Math.random() < 0.5 ? 1 : -1;
+    const bMove = Math.random() < 0.5 ? 1 : -1;
+    const newA = mod(pos[0] + aMove, n);
+    const newB = mod(pos[1] + bMove, n);
+
+    const steps = 15;
+    for(let s=1; s<=steps; s++){
+      drawPolygon(n, a, b, [ [pos[0], newA, s/steps], [pos[1], newB, s/steps] ]);
+      await new Promise(r=>requestAnimationFrame(r));
+    }
+
+    pos = [newA,newB];
+    a = newA; b = newB;
+
+    if(newA === newB || (n%2!==0 && newA === b && newB === a)){
+      cumulativeResults.push(rounds);
+      updateStats(cumulativeResults);
+      running = false;
+    }
+  }
+}
+
+// --- Button handlers ---
+$('btn1').onclick=()=>{const n=parseInt($('nSides').value),a=parseInt($('startA').value),b=$('autoOpp').checked?oppositeIndex(n,a):a; cumulativeResults.push(runOne(n,a,b));updateStats(cumulativeResults);};
+$('btn10').onclick=()=>{const n=parseInt($('nSides').value),a=parseInt($('startA').value),b=$('autoOpp').checked?oppositeIndex(n,a):a; for(let i=0;i<10;i++) cumulativeResults.push(runOne(n,a,b)); updateStats(cumulativeResults);};
+$('btn50').onclick=()=>{const n=parseInt($('nSides').value),a=parseInt($('startA').value),b=$('autoOpp').checked?oppositeIndex(n,a):a; for(let i=0;i<50;i++) cumulativeResults.push(runOne(n,a,b)); updateStats(cumulativeResults);};
+$('btn1000').onclick=()=>{const n=parseInt($('nSides').value),a=parseInt($('startA').value),b=$('autoOpp').checked?oppositeIndex(n,a):a; for(let i=0;i<1000;i++) cumulativeResults.push(runOne(n,a,b)); updateStats(cumulativeResults);};
+$('animate').onclick=animateSim;
+$('reset').onclick=()=>{cumulativeResults=[];updateStats([]);init();};
+$('nSides').addEventListener('change',()=>{cumulativeResults=[];updateStats([]);init();});
+
+function init(){const n=parseInt($('nSides').value)||5; const a=parseInt($('startA').value)||0; const b=$('autoOpp').checked?oppositeIndex(n,a):a; drawPolygon(n,a,b);}
+window.addEventListener('resize',()=>{canvas.width=Math.min(700,Math.max(420,Math.floor(window.innerWidth*0.55)));canvas.height=340;init();});
+canvas.width=Math.min(700,Math.max(420,Math.floor(window.innerWidth*0.55)));canvas.height=340;init();
+</script>
+</body>
+</html>
